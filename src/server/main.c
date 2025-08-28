@@ -1,0 +1,301 @@
+#include <stdio.h>
+#include <immintrin.h>
+#include <math.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <string.h>
+#include <time.h>
+#include <utils/vector_utils.h>
+
+void * map_db_to_memory(char *filename, int *out_fd, size_t *out_size) {
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) {
+        perror("Error opening file");
+        goto ErrorHandling;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        perror("Error getting file size");
+        goto CloseFileAndHandleError;
+    }
+    size_t filesize = st.st_size;
+
+    // Memory map the file (read-only)
+    void *map = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        perror("Error mapping file to memory");
+        goto CloseFileAndHandleError;
+    }
+
+    volatile uint8_t tmp = 0;
+    for (size_t i = 0; i < filesize; i += 4096) {
+        tmp ^= ((uint8_t *)map)[i];  // force page to be faulted in
+    }
+    (void)tmp; // Prevent unused variable warning
+
+    *out_fd = fd;
+    *out_size = filesize;
+    return map;
+
+CloseFileAndHandleError:
+    close(fd);
+ErrorHandling:
+    return NULL;
+}
+
+void fill_random_bools(uint8_t *array, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        array[i] = rand() % 2;  // random boolean [0, 1]
+    }
+}
+
+void fill_random_bytes(uint8_t *array, size_t size) {
+    uint32_t *buf = (uint32_t *)array;
+    for (size_t i = 0; i < size / 4; i++) {
+        buf[i] = rand();  // random byte [0, 255]
+    }
+}
+
+void process_pir_variant0(const uint8_t *db, size_t bit_len, size_t query_size, uint8_t *q1, uint8_t *q2, uint8_t *q3, __m256i *result) {
+    size_t bytes = (bit_len + 7) / 8;
+    __m256i acc = _mm256_setzero_si256();
+
+    // Precompute active indices for q1, q2, q3 to reduce branch misprediction
+    size_t active_i1[query_size], active_i2[query_size], active_i3[query_size];
+    size_t n1 = 0, n2 = 0, n3 = 0;
+    for (size_t i = 0; i < query_size; i++) {
+        if (q1[i]) active_i1[n1++] = i;
+        if (q2[i]) active_i2[n2++] = i;
+        if (q3[i]) active_i3[n3++] = i;
+    }
+
+    for (size_t a1 = 0; a1 < n1; a1++) {
+        size_t i1 = active_i1[a1];
+        for (size_t a2 = 0; a2 < n2; a2++) {
+            size_t i2 = active_i2[a2];
+            for (size_t a3 = 0; a3 < n3; a3++) {
+                size_t i3 = active_i3[a3];
+                size_t base_index = (i1 * query_size * query_size + i2 * query_size + i3) * 32;
+                if (base_index + 32 > bytes) continue;
+                // Use unaligned load for safety and flexibility
+                __m256i va = _mm256_loadu_si256((const __m256i *)(db + base_index));
+                acc = _mm256_xor_si256(acc, va);
+            }
+        }
+    }
+    *result = acc;
+}
+
+void process_slices(const uint8_t *db, size_t bit_len, size_t query_size, uint8_t *q1, uint8_t *q2, uint8_t *q3, uint8_t dim, __m256i *results) {
+    size_t bytes = (bit_len + 7) / 8;
+
+    // Precompute active indices for q1, q2, q3 to reduce branch misprediction
+    size_t active_i1[query_size], active_i2[query_size], active_i3[query_size];
+    size_t n1 = 0, n2 = 0, n3 = 0;
+    for (size_t i = 0; i < query_size; i++)
+    {
+        if (q1[i])
+            active_i1[n1++] = i;
+        if (q2[i])
+            active_i2[n2++] = i;
+        if (q3[i])
+            active_i3[n3++] = i;
+    }
+    size_t *active_slice = NULL;
+    if (dim == 0) {
+        active_slice = active_i1;
+        n1 = query_size;
+    }
+    else if (dim == 1) {
+        active_slice = active_i2;
+        n2 = query_size;
+    }
+    else if (dim == 2) {
+        active_slice = active_i3;
+        n3 = query_size;
+    }
+    for (size_t i = 0; i < query_size; i++) {
+        active_slice[i] = i;
+    }
+
+    for (size_t slice = 0; slice < query_size; slice++) {
+        results[slice] = _mm256_setzero_si256();
+    }
+    for (size_t a1 = 0; a1 < n1; a1++)
+    {
+        size_t i1 = active_i1[a1];
+        for (size_t a2 = 0; a2 < n2; a2++)
+        {
+            size_t i2 = active_i2[a2];
+            for (size_t a3 = 0; a3 < n3; a3++)
+            {
+                size_t i3 = active_i3[a3];
+                size_t base_index = (i1 * query_size * query_size + i2 * query_size + i3) * 32;
+                if (base_index + 32 > bytes)
+                    continue;
+                // Use unaligned load for safety and flexibility
+                __m256i va = _mm256_loadu_si256((const __m256i *)(db + base_index));
+
+                size_t slice = i1 * (dim == 0) + i2 * (dim == 1) + i3 * (dim == 2);
+                results[slice] = _mm256_xor_si256(results[slice], va);
+            }
+        }
+    }
+}
+
+__m256i *process_pir_variant1(const uint8_t *db, size_t bit_len, size_t query_size, uint8_t *q1, uint8_t *q2, uint8_t *q3) {
+    __m256i acc = _mm256_setzero_si256();
+    __m256i *result = aligned_alloc(32, (query_size * 3 + 1) * sizeof(__m256i));
+    if (!result) {
+        perror("Error allocating memory for results");
+        return NULL;
+    }
+    process_pir_variant0(db, bit_len, query_size, q1, q2, q3, &acc);
+    result[query_size * 3] = acc;
+    for (uint8_t dim = 0; dim < 3; dim++) {
+        process_slices(db, bit_len, query_size, q1, q2, q3, dim, &result[dim * query_size]);
+    }
+    for (size_t i = 0; i < query_size * 3; i++) {
+        result[i] = _mm256_xor_si256(acc, result[i]);
+    }
+    return result;
+}
+
+void create_queries(size_t query_size, uint8_t **q1, uint8_t **q2, uint8_t **q3) {
+    *q1 = calloc(query_size, 1);
+    *q2 = calloc(query_size, 1);
+    *q3 = calloc(query_size, 1);
+    if (!*q1 || !*q2 || !*q3) {
+        perror("Error allocating memory for queries");
+        free(*q1);
+        free(*q2);
+        free(*q3);
+        return;
+    }
+    fill_random_bools(*q1, query_size);
+    fill_random_bools(*q2, query_size);
+    fill_random_bools(*q3, query_size);
+    // memset(*q1, 0, query_size);
+    // memset(*q2, 0, query_size);
+    // memset(*q3, 0, query_size);
+    // // (*q1)[1] = 1;
+    // (*q2)[1] = 1;
+    // (*q3)[1] = 1;
+}
+
+void test_2_servers_pir(uint8_t *db, size_t bit_len) {
+    uint16_t i1 = 0, i2 = 0, i3 = 0;
+    size_t query_size = cbrt(bit_len / 256); // each entry is 256 bits (32 bytes) 
+    uint8_t *q1, *q2, *q3;
+    __m256i *results_0, *results_1;
+    create_queries(query_size, &q1, &q2, &q3);
+
+    printf("query_size: %zu\n", query_size);
+
+    double elapsed = 0;
+    clock_t start = clock();
+    results_0 = process_pir_variant1(db, bit_len, query_size, q1, q2, q3);
+    clock_t end = clock();
+    elapsed += (double)(end - start) / CLOCKS_PER_SEC;
+    start = clock();
+    q1[i1] ^= 1;
+    q2[i2] ^= 1;
+    q3[i3] ^= 1;
+    results_1 = process_pir_variant1(db, bit_len, query_size, q1, q2, q3);
+    end = clock();
+    elapsed += (double)(end - start) / CLOCKS_PER_SEC;
+
+    printf("Elapsed time: %.6f seconds\n", elapsed);
+    printf("throughput per server: %.2f MB/s\n",  bit_len / (8 * 1024.0 * 1024.0) / (elapsed / 2));
+
+    __m256i read_entry = results_0[query_size * 3];
+    read_entry = _mm256_xor_si256(read_entry, results_1[query_size * 3]);
+
+    read_entry = _mm256_xor_si256(read_entry, results_0[i1]);
+    read_entry = _mm256_xor_si256(read_entry, results_1[i1]);
+
+    read_entry = _mm256_xor_si256(read_entry, results_0[query_size + i2]);
+    read_entry = _mm256_xor_si256(read_entry, results_1[query_size + i2]);
+
+    read_entry = _mm256_xor_si256(read_entry, results_0[2 * query_size + i3]);
+    read_entry = _mm256_xor_si256(read_entry, results_1[2 * query_size + i3]);
+    printf("entry: %08x\n", _mm256_extract_epi32(read_entry, 0));
+
+    free(q1);
+    free(q2);
+    free(q3);
+    free(results_0);
+    free(results_1);
+}
+
+void test_8_servers_pir(uint8_t *db, size_t bit_len) {
+    uint16_t i1 = 0, i2 = 0, i3 = 0;
+    size_t query_size = cbrt(bit_len / 256); // each entry is 256 bits (32 bytes) 
+    uint8_t *q1, *q2, *q3;
+    __m256i results[8];
+    memset(results, 0, sizeof(results));
+    create_queries(query_size, &q1, &q2, &q3);
+
+    printf("query_size: %zu\n", query_size);
+
+    double elapsed = 0;
+    for (int s = 0; s < 8; s++){
+        q1[i1] ^= s >> 2;
+        q2[i2] ^= s >> 1 & 1;
+        q3[i3] ^= s & 1;
+        clock_t start = clock();
+        process_pir_variant0(db, bit_len, query_size, q1, q2, q3, &results[s]);
+        clock_t end = clock();
+        elapsed += (double)(end - start) / CLOCKS_PER_SEC;
+        q1[i1] ^= s >> 2;
+        q2[i2] ^= s >> 1 & 1;
+        q3[i3] ^= s & 1;
+    }
+    printf("Elapsed time: %.6f seconds\n", elapsed);
+    printf("throughput per server: %.2f MB/s\n",  bit_len / (8 * 1024.0 * 1024.0) / (elapsed / 8));
+    printf("throughput for 4 servers in one: %.2f MB/s\n",  bit_len / (8 * 1024.0 * 1024.0) / (elapsed / 2));
+
+    __m256i read_entry = results[0];
+    for (int i = 1; i < 8; i++) {
+        read_entry = _mm256_xor_si256(read_entry, results[i]);
+    }
+    printf("entry: %08x\n", _mm256_extract_epi32(read_entry, 0));
+
+    free(q1);
+    free(q2);
+    free(q3);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
+        return 1;
+    }
+
+    int fd;
+    size_t file_size;
+    uint8_t *db = map_db_to_memory(argv[1], &fd, &file_size);
+    if (!db) {
+        return 1;
+    }
+
+    /* v2 */
+    uint8_t *q = malloc(file_size);
+    if (!q) {
+        perror("Error allocating memory for query vector");
+        goto ErrorHandling;
+    }
+    test_8_servers_pir(db, file_size * 8);
+
+    printf("\nTesting 2 servers:\n");
+    test_2_servers_pir(db, file_size * 8);
+    return 0;
+ErrorHandling:
+    munmap(db, file_size);
+    close(fd);
+    return 1;
+}
