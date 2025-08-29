@@ -135,13 +135,17 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t query_size, uint8_
                 size_t base_index = (i1 * query_size * query_size + i2 * query_size + i3) * (BLOCK_SIZE * BLOCKS_PER_ENTRY);
                 if (base_index + (BLOCK_SIZE * BLOCKS_PER_ENTRY) > bytes)
                     continue;
-                size_t prefetch_base_index = (i1 * query_size * query_size + i2 * query_size + active_i3[a3 + 1]) * (BLOCK_SIZE * BLOCKS_PER_ENTRY);
-                for (size_t cache_line = 0; cache_line < PREFETCH_LINES_COUNT; cache_line++) {
-                    __builtin_prefetch(db + prefetch_base_index + cache_line * CACHE_LINE_SIZE, 0, 3);
+                if (a3 + 1 < n3)
+                {
+                    size_t prefetch_base_index = (i1 * query_size * query_size + i2 * query_size + active_i3[a3 + 1]) * (BLOCK_SIZE * BLOCKS_PER_ENTRY);
+                    for (size_t cache_line = 0; cache_line < PREFETCH_LINES_COUNT; cache_line++)
+                    {
+                        __builtin_prefetch(db + prefetch_base_index + cache_line * CACHE_LINE_SIZE, 0, 3);
+                    }
                 }
                 size_t slice = i1 * (dim == 0) + i2 * (dim == 1) + i3 * (dim == 2);
                 for (size_t block = 0; block < BLOCKS_PER_ENTRY; block++) {
-                    __m256i va1 = _mm256_loadu_si256((const __m256i *)(db + base_index + block * BLOCK_SIZE));
+                    __m256i va1 = _mm256_load_si256((const __m256i *)(db + base_index + block * BLOCK_SIZE));
                     results[slice * BLOCKS_PER_ENTRY + block] = _mm256_xor_si256(results[slice * BLOCKS_PER_ENTRY + block], va1);
                 }
             }
