@@ -10,53 +10,20 @@
 #include <time.h>
 #include <utils/vector_utils.h>
 
-void * map_db_to_memory(char *filename, int *out_fd, size_t *out_size) {
-    int fd = open(filename, O_RDONLY);
-    if (fd < 0) {
-        perror("Error opening file");
-        goto ErrorHandling;
+#define SAMPLES (100)
+
+
+void * create_db(size_t size) {
+    uint8_t *db = aligned_alloc(64, size);
+    for (size_t i = 0; i < size; i++) {
+        db[i] = rand() % 256;
     }
-
-    struct stat st;
-    if (fstat(fd, &st) == -1) {
-        perror("Error getting file size");
-        goto CloseFileAndHandleError;
-    }
-    size_t filesize = st.st_size;
-
-    // Memory map the file (read-only)
-    void *map = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (map == MAP_FAILED) {
-        perror("Error mapping file to memory");
-        goto CloseFileAndHandleError;
-    }
-
-    volatile uint8_t tmp = 0;
-    for (size_t i = 0; i < filesize; i += 4096) {
-        tmp ^= ((uint8_t *)map)[i];  // force page to be faulted in
-    }
-    (void)tmp; // Prevent unused variable warning
-
-    *out_fd = fd;
-    *out_size = filesize;
-    return map;
-
-CloseFileAndHandleError:
-    close(fd);
-ErrorHandling:
-    return NULL;
+    return db;
 }
 
 void fill_random_bools(uint8_t *array, size_t size) {
     for (size_t i = 0; i < size; i++) {
         array[i] = rand() % 2;  // random boolean [0, 1]
-    }
-}
-
-void fill_random_bytes(uint8_t *array, size_t size) {
-    uint32_t *buf = (uint32_t *)array;
-    for (size_t i = 0; i < size / 4; i++) {
-        buf[i] = rand();  // random byte [0, 255]
     }
 }
 
@@ -220,9 +187,12 @@ void create_queries(size_t query_size, uint8_t **q1, uint8_t **q2, uint8_t **q3)
     // (*q3)[1] = 1;
 }
 
-void test_2_servers_pir(uint8_t *db, size_t bit_len) {
+double test_2_servers_pir(uint8_t *db, size_t bit_len) {
     uint16_t i1 = 0, i2 = 0, i3 = 0;
     size_t query_size = cbrt(bit_len / 512); // each entry is 256 bits (32 bytes) 
+    i1 = rand() % query_size;
+    i2 = rand() % query_size;
+    i3 = rand() % query_size;
     uint8_t *q1, *q2, *q3;
     __m256i *results_0, *results_1;
     create_queries(query_size, &q1, &q2, &q3);
@@ -241,9 +211,10 @@ void test_2_servers_pir(uint8_t *db, size_t bit_len) {
     results_1 = process_pir_variant1(db, bit_len, query_size, q1, q2, q3);
     end = clock();
     elapsed += (double)(end - start) / CLOCKS_PER_SEC;
+    double throughput = bit_len / (8 * 1024.0 * 1024.0) / (elapsed / 2);
 
     printf("Elapsed time: %.6f seconds\n", elapsed);
-    printf("throughput per server: %.2f MB/s\n",  bit_len / (8 * 1024.0 * 1024.0) / (elapsed / 2));
+    printf("throughput per server: %.2f MB/s\n",  throughput);
 
     __m256i read_entry = results_0[query_size * 3 * 2];
     read_entry = _mm256_xor_si256(read_entry, results_1[query_size * 3 * 2]);
@@ -269,6 +240,8 @@ void test_2_servers_pir(uint8_t *db, size_t bit_len) {
     free(q3);
     free(results_0);
     free(results_1);
+
+    return throughput;
 }
 
 void test_4_servers_pir(uint8_t *db, size_t bit_len) {
@@ -309,32 +282,52 @@ void test_4_servers_pir(uint8_t *db, size_t bit_len) {
     free(q3);
 }
 
+double average_throughput(double *throughputs, int count) {
+    double sum = 0;
+    for (int i = 0; i < count; i++) {
+        sum += throughputs[i];
+    }
+    return sum / count;
+}
+
+double std_throughput(double *throughputs, int count) {
+    double avg = average_throughput(throughputs, count);
+    double sum = 0;
+    for (int i = 0; i < count; i++) {
+        sum += (throughputs[i] - avg) * (throughputs[i] - avg);
+    }
+    return sqrt(sum / count);
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
         return 1;
     }
 
-    int fd;
-    size_t file_size;
-    uint8_t *db = map_db_to_memory(argv[1], &fd, &file_size);
+    size_t file_size = (1 * 1024 * 1024 * 1024);
+    uint8_t *db = create_db(file_size);
     if (!db) {
         return 1;
     }
 
     /* v2 */
-    uint8_t *q = malloc(file_size);
-    if (!q) {
-        perror("Error allocating memory for query vector");
-        goto ErrorHandling;
-    }
     test_4_servers_pir(db, file_size * 8);
 
     printf("\nTesting 2 servers:\n");
-    test_2_servers_pir(db, file_size * 8);
+    double throughput_agg = 0;
+    (void)test_2_servers_pir(db, file_size * 8);
+
+    // 100 samples, ignoring first one
+    double throughputs[SAMPLES];
+    throughput_agg = 0;
+    for (int i = 0; i < SAMPLES; i++) {
+        throughputs[i] = test_2_servers_pir(db, file_size * 8);
+        throughput_agg += throughputs[i];
+    }
+    double avg = average_throughput(throughputs, SAMPLES);
+    double std = std_throughput(throughputs, SAMPLES);
+    printf("Average throughput for 100 samples: %.2f MB/s, Std: %.2f MB/s\n", avg, std);
+    free(db);
     return 0;
-ErrorHandling:
-    munmap(db, file_size);
-    close(fd);
-    return 1;
 }
