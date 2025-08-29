@@ -90,6 +90,22 @@ void process_pir_variant0(const uint8_t *db, size_t bit_len, size_t query_size, 
     *result = acc;
 }
 
+void prefetch_data(const uint8_t *db, size_t i1, size_t i2, size_t *active_i3, size_t n3, size_t query_size, size_t bytes, size_t start_i3, size_t window_size)
+{
+    for (size_t a3 = start_i3; a3 < start_i3 + window_size; a3++)
+    {
+        if (a3 >= n3)
+            break;
+        size_t i3 = active_i3[a3];
+        // Prefetch next db block to L1 cache
+        size_t prefetch_index = (i1 * query_size * query_size + i2 * query_size + i3) * 64;
+        if (prefetch_index + 64 < bytes)
+        {
+            __builtin_prefetch(db + prefetch_index);
+        }
+    }
+}
+
 void process_slices(const uint8_t *db, size_t bit_len, size_t query_size, uint8_t *q1, uint8_t *q2, uint8_t *q3, uint8_t dim, __m256i *results) {
     size_t bytes = (bit_len + 7) / 8;
 
@@ -123,11 +139,13 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t query_size, uint8_
             active_slice[i] = i;
         }
         for (size_t slice = 0; slice < query_size; slice++) {
-            results[slice] = _mm256_setzero_si256();
+            results[slice * 2] = _mm256_setzero_si256();
+            results[slice * 2 + 1] = _mm256_setzero_si256();
         }
     }
     else {
         results[0] = _mm256_setzero_si256();
+        results[1] = _mm256_setzero_si256();
     }
 
     for (size_t a1 = 0; a1 < n1; a1++)
@@ -136,36 +154,46 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t query_size, uint8_
         for (size_t a2 = 0; a2 < n2; a2++)
         {
             size_t i2 = active_i2[a2];
+            prefetch_data(db, i1, i2, active_i3, n3, query_size, bytes, 0, 32);
             for (size_t a3 = 0; a3 < n3; a3++)
             {
                 size_t i3 = active_i3[a3];
-                size_t base_index = (i1 * query_size * query_size + i2 * query_size + i3) * 32;
-                if (base_index + 32 > bytes)
+                size_t prefetch_index = (active_i1[a1]* query_size * query_size + active_i2[a2] * query_size + active_i3[a3 + 32]) * 64;
+                if (a3 + 32 < n3 && prefetch_index + 128 < bytes) {
+                    __builtin_prefetch(db + prefetch_index);
+                }
+
+                size_t base_index = (i1 * query_size * query_size + i2 * query_size + i3) * 64;
+                if (base_index + 64 > bytes)
                     continue;
                 // Use unaligned load for safety and flexibility
-                __m256i va = _mm256_loadu_si256((const __m256i *)(db + base_index));
+                __m256i va1 = _mm256_loadu_si256((const __m256i *)(db + base_index));
+                __m256i va2 = _mm256_loadu_si256((const __m256i *)(db + base_index + 32));
 
                 size_t slice = i1 * (dim == 0) + i2 * (dim == 1) + i3 * (dim == 2);
-                results[slice] = _mm256_xor_si256(results[slice], va);
+                results[slice * 2] = _mm256_xor_si256(results[slice * 2], va1);
+                results[slice * 2 + 1] = _mm256_xor_si256(results[slice * 2 + 1], va2);
             }
         }
     }
 }
 
 __m256i *process_pir_variant1(const uint8_t *db, size_t bit_len, size_t query_size, uint8_t *q1, uint8_t *q2, uint8_t *q3) {
-    __m256i acc = _mm256_setzero_si256();
-    __m256i *result = aligned_alloc(32, (query_size * 3 + 1) * sizeof(__m256i));
+    __m256i acc[2] = {_mm256_setzero_si256(), _mm256_setzero_si256()};
+    __m256i *result = aligned_alloc(64, (query_size * 3 + 1) * sizeof(__m256i) * 2);
     if (!result) {
         perror("Error allocating memory for results");
         return NULL;
     }
-    process_slices(db, bit_len, query_size, q1, q2, q3, 0xff, &acc);
-    result[query_size * 3] = acc;
+    process_slices(db, bit_len, query_size, q1, q2, q3, 0xff, acc);
+    result[query_size * 6] = acc[0];
+    result[query_size * 6 + 1] = acc[1];
     for (uint8_t dim = 0; dim < 3; dim++) {
-        process_slices(db, bit_len, query_size, q1, q2, q3, dim, &result[dim * query_size]);
+        process_slices(db, bit_len, query_size, q1, q2, q3, dim, &result[dim * 2 * query_size]);
     }
     for (size_t i = 0; i < query_size * 3; i++) {
-        result[i] = _mm256_xor_si256(acc, result[i]);
+        result[i * 2] = _mm256_xor_si256(acc[0], result[i * 2]);
+        result[i * 2 + 1] = _mm256_xor_si256(acc[1], result[i * 2 + 1]);
     }
     return result;
 }
@@ -194,7 +222,7 @@ void create_queries(size_t query_size, uint8_t **q1, uint8_t **q2, uint8_t **q3)
 
 void test_2_servers_pir(uint8_t *db, size_t bit_len) {
     uint16_t i1 = 0, i2 = 0, i3 = 0;
-    size_t query_size = cbrt(bit_len / 256); // each entry is 256 bits (32 bytes) 
+    size_t query_size = cbrt(bit_len / 512); // each entry is 256 bits (32 bytes) 
     uint8_t *q1, *q2, *q3;
     __m256i *results_0, *results_1;
     create_queries(query_size, &q1, &q2, &q3);
@@ -217,17 +245,17 @@ void test_2_servers_pir(uint8_t *db, size_t bit_len) {
     printf("Elapsed time: %.6f seconds\n", elapsed);
     printf("throughput per server: %.2f MB/s\n",  bit_len / (8 * 1024.0 * 1024.0) / (elapsed / 2));
 
-    __m256i read_entry = results_0[query_size * 3];
-    read_entry = _mm256_xor_si256(read_entry, results_1[query_size * 3]);
+    __m256i read_entry = results_0[query_size * 3 * 2];
+    read_entry = _mm256_xor_si256(read_entry, results_1[query_size * 3 * 2]);
 
-    read_entry = _mm256_xor_si256(read_entry, results_0[i1]);
-    read_entry = _mm256_xor_si256(read_entry, results_1[i1]);
+    read_entry = _mm256_xor_si256(read_entry, results_0[i1 * 2]);
+    read_entry = _mm256_xor_si256(read_entry, results_1[i1 * 2]);
 
-    read_entry = _mm256_xor_si256(read_entry, results_0[query_size + i2]);
-    read_entry = _mm256_xor_si256(read_entry, results_1[query_size + i2]);
+    read_entry = _mm256_xor_si256(read_entry, results_0[query_size * 2 + i2 * 2]);
+    read_entry = _mm256_xor_si256(read_entry, results_1[query_size * 2 + i2 * 2]);
 
-    read_entry = _mm256_xor_si256(read_entry, results_0[2 * query_size + i3]);
-    read_entry = _mm256_xor_si256(read_entry, results_1[2 * query_size + i3]);
+    read_entry = _mm256_xor_si256(read_entry, results_0[4 * query_size + i3 * 2]);
+    read_entry = _mm256_xor_si256(read_entry, results_1[4 * query_size + i3 * 2]);
     printf("entry: %08x\n", _mm256_extract_epi32(read_entry, 0));
 
     free(q1);
