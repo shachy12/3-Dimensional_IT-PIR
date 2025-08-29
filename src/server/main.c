@@ -118,13 +118,18 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t query_size, uint8_
         active_slice = active_i3;
         n3 = query_size;
     }
-    for (size_t i = 0; i < query_size; i++) {
-        active_slice[i] = i;
+    if (dim <= 2) {
+        for (size_t i = 0; i < query_size; i++) {
+            active_slice[i] = i;
+        }
+        for (size_t slice = 0; slice < query_size; slice++) {
+            results[slice] = _mm256_setzero_si256();
+        }
+    }
+    else {
+        results[0] = _mm256_setzero_si256();
     }
 
-    for (size_t slice = 0; slice < query_size; slice++) {
-        results[slice] = _mm256_setzero_si256();
-    }
     for (size_t a1 = 0; a1 < n1; a1++)
     {
         size_t i1 = active_i1[a1];
@@ -154,7 +159,7 @@ __m256i *process_pir_variant1(const uint8_t *db, size_t bit_len, size_t query_si
         perror("Error allocating memory for results");
         return NULL;
     }
-    process_pir_variant0(db, bit_len, query_size, q1, q2, q3, &acc);
+    process_slices(db, bit_len, query_size, q1, q2, q3, 0xff, &acc);
     result[query_size * 3] = acc;
     for (uint8_t dim = 0; dim < 3; dim++) {
         process_slices(db, bit_len, query_size, q1, q2, q3, dim, &result[dim * query_size]);
@@ -232,7 +237,7 @@ void test_2_servers_pir(uint8_t *db, size_t bit_len) {
     free(results_1);
 }
 
-void test_8_servers_pir(uint8_t *db, size_t bit_len) {
+void test_4_servers_pir(uint8_t *db, size_t bit_len) {
     uint16_t i1 = 0, i2 = 0, i3 = 0;
     size_t query_size = cbrt(bit_len / 256); // each entry is 256 bits (32 bytes) 
     uint8_t *q1, *q2, *q3;
@@ -289,7 +294,7 @@ int main(int argc, char *argv[]) {
         perror("Error allocating memory for query vector");
         goto ErrorHandling;
     }
-    test_8_servers_pir(db, file_size * 8);
+    test_4_servers_pir(db, file_size * 8);
 
     printf("\nTesting 2 servers:\n");
     test_2_servers_pir(db, file_size * 8);
