@@ -299,19 +299,13 @@ double std_throughput(double *throughputs, int count) {
     return sqrt(sum / count);
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
-        return 1;
-    }
-
+int main(void) {
     size_t file_size = (1 * 1024 * 1024 * 1024);
     uint8_t *db = create_db(file_size);
     if (!db) {
         return 1;
     }
 
-    /* v2 */
     test_4_servers_pir(db, file_size * 8);
 
     printf("\nTesting 2 servers:\n");
