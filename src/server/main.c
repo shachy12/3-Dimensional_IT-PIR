@@ -257,6 +257,12 @@ void test_2_servers_pir(uint8_t *db, size_t bit_len) {
     read_entry = _mm256_xor_si256(read_entry, results_0[4 * query_size + i3 * 2]);
     read_entry = _mm256_xor_si256(read_entry, results_1[4 * query_size + i3 * 2]);
     printf("entry: %08x\n", _mm256_extract_epi32(read_entry, 0));
+    uint32_t entry = _mm256_extract_epi32(read_entry, 0);
+    if (memcmp(&entry, &db[(i1 * query_size * query_size + i2 * query_size + i3) * 64], 4) != 0) {
+        printf("Error: entry does not match database\n");
+    } else {
+        printf("Success: entry matches database\n");
+    }
 
     free(q1);
     free(q2);
