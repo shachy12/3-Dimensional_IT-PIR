@@ -39,7 +39,7 @@ __m256i * reconstruct(size_t i1, size_t i2, size_t i3, __m256i *server_1_results
         perror("Error allocating memory for read_entry");
         return 0;
     }
-    for (int block = 0; block < blocks_per_entry; block++) {
+    for (size_t block = 0; block < blocks_per_entry; block++) {
         read_entry[block] = server_1_results[query_size * 3 * blocks_per_entry + block];
         read_entry[block] = _mm256_xor_si256(read_entry[block], server_2_results[query_size * 3 * blocks_per_entry + block]);
 

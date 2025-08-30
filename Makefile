@@ -1,16 +1,17 @@
 CC = gcc
 CFLAGS = -Iincludes/ -O3 -Wall -Wextra -march=native -mavx2 -mpopcnt
-SRC = src/main.c src/pir_client.c src/pir_server.c
-OBJ = $(SRC:.c=.o)
+SRC_DIR = src
+SOURCES = $(addprefix $(SRC_DIR)/, main.c pir_client.c pir_server.c)
+BIN_DIR = bin
 TARGET = server
 
 all: $(TARGET)
 
-$(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+$(TARGET): $(BIN_DIR) $(SOURCES)
+	$(CC) $(CFLAGS) -o $(BIN_DIR)/$@ $(SOURCES) -lm
 
 clean:
-	rm -f $(OBJ) $(TARGET)
+	rm -rf $(BIN_DIR)
