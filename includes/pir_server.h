@@ -16,6 +16,6 @@ typedef struct {
 } pir_server_t;
 
 pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_entry);
-__m256i *pir_answer(pir_server_t *self, uint8_t *q1, uint8_t *q2, uint8_t *q3);
+__m256i *pir_answer(pir_server_t *self, uint8_t *q1, uint8_t *q2);
 
 #endif
