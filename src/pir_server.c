@@ -11,6 +11,8 @@
 #include <time.h>
 #include "pir_server.h"
 
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
 pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_entry)
 {
     pir_server_t *server = malloc(sizeof(pir_server_t));
@@ -69,6 +71,7 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t block_per_entry, s
         }
     }
 
+    size_t prefetch_lines_count = min(PREFETCH_LINES_COUNT, block_per_entry * BLOCK_SIZE / CACHE_LINE_SIZE);
     for (size_t a1 = 0; a1 < n1; a1++)
     {
         size_t i1 = active_i1[a1];
@@ -84,7 +87,7 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t block_per_entry, s
                 if (a3 + 1 < n3)
                 {
                     size_t prefetch_base_index = (i1 * query_size * query_size + i2 * query_size + active_i3[a3 + 1]) * (BLOCK_SIZE * block_per_entry);
-                    for (size_t cache_line = 0; cache_line < PREFETCH_LINES_COUNT; cache_line++)
+                    for (size_t cache_line = 0; cache_line < prefetch_lines_count; cache_line++)
                     {
                         __builtin_prefetch(db + prefetch_base_index + cache_line * CACHE_LINE_SIZE, 0, 3);
                     }
