@@ -2,6 +2,7 @@
 This project implements the 2-server, 3-dimensional Private Information Retrieval PIR protocol described in [Private Information Retrieval](https://dl.acm.org/doi/pdf/10.1145/293347.293350) by Benny Chor, Oded Golreich, Eyal Kushilevitz, and Madhu Sudan. The goal is to enable users to retrieve data privately from two servers without revealing which item is being accessed.
 
 To maximize performance, the implementation leverages AVX vectorized instructions and memory prefetching techniques. These optimizations help accelerate the core PIR computations and reduce memory access latency.
+The PIR entries are divided into blocks, each block is 32 bytes to match with AVX vectorized instructions.
 
 # Experiments
 We conducted experiments using a 1GB database, varying the entry sizes to evaluate performance. Throughput was measured by dividing the total database size by the elapsed time for each server simulation. The results are visualized below:
