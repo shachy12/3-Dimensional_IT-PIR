@@ -34,15 +34,11 @@ Upon receiving a query $(S_1, S_2, S_3)$, the server computes:
 
 1. **Base Subcube XOR:**  
     Calculate the XOR of bits in the subcube defined by $(S_1, S_2, S_3)$:
-    $$
-    A_{S_1 S_2 S_3} = \bigoplus_{(j_1, j_2, j_3) \in S_1 \times S_2 \times S_3} x_{j_1, j_2, j_3}
-    $$
+    $$A_{S_1 S_2 S_3} = \bigoplus_{(j_1, j_2, j_3) \in S_1 \times S_2 \times S_3} x_{j_1, j_2, j_3}$$
 
 2. **Subcubes with Hamming-1 Neighbors:**  
     For each coordinate $t \in \{1,2,3\}$ and every $j \in [N]$, compute:
-    $$
-    A_{S_1 S_2 S_3, t, j} = \bigoplus_{\substack{j_i \in S_i \ \forall i \neq t \\ j_t \in S_t \oplus \{j\}}} x_{j_1, j_2, j_3}
-    $$
+    $$A_{S_1 S_2 S_3, t, j} = \bigoplus_{\substack{j_i \in S_i \ \forall i \neq t \\ j_t \in S_t \oplus \{j\}}} x_{j_1, j_2, j_3}$$
 
 Overall, $3N + 1 = 3n^{1/3} + 1$ bits are returned.
 
