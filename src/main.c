@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <stdbool.h>
 #include "pir_client.h"
 #include "pir_server.h"
 
@@ -108,11 +109,12 @@ double std_throughput(double *throughputs, int count) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        printf("Usage: ./pir_server <DB_SIZE> <BLOCKS_PER_ENTRY> <SAMPLES>\n"
+    if (argc != 4 && argc != 5) {
+        printf("Usage: ./pir_server <DB_SIZE> <BLOCKS_PER_ENTRY> <SAMPLES> <PREFETCH>\n"
                "- DB_SIZE               The LOG on the tested DB Bytes size\n"
                "- BLOCKS_PER_ENTRY      The number of blocks per entry, each block is 128 bits\n"
                "- SAMPLES               The number of samples to collect\n"
+               "- PREFETCH              Whether to use prefetching (1) or not (0) [default=1]\n"
                "\nExample: create a database with 2^30 bytes, 128 blocks per entry and run 100 experiments to sample throughput\n"
                "./pir_server 30 128 100\n");
         return 1;
@@ -120,6 +122,11 @@ int main(int argc, char *argv[]) {
     int log_db_size = atoi(argv[1]);
     int blocks_per_entry = atoi(argv[2]);
     int samples = atoi(argv[3]);
+    bool use_prefetching = true;
+    if (argc == 5) {
+        use_prefetching = atoi(argv[4]);
+    }
+    printf("Using prefetching: %s\n", use_prefetching ? "Yes" : "No");
     size_t file_size = 1UL << log_db_size;
     printf("Generating DB of size %zu bytes, blocks per entry: %d\n", file_size, blocks_per_entry);
     uint8_t *db = create_db(file_size);
@@ -127,7 +134,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    pir_server_t *server = pir_server_alloc(db, file_size, blocks_per_entry);
+    pir_server_t *server = pir_server_alloc(db, file_size, blocks_per_entry, use_prefetching);
     if (!server) {
         free(db);
         perror("Error allocating PIR server");

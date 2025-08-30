@@ -9,11 +9,12 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <stdbool.h>
 #include "pir_server.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_entry)
+pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_entry, bool prefetch_cache_lines)
 {
     pir_server_t *server = malloc(sizeof(pir_server_t));
     if (!server) {
@@ -24,10 +25,11 @@ pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_en
     server->db_size_bits = db_size * 8;
     server->blocks_per_entry = blocks_per_entry;
     server->query_size = sqrt(db_size / (BLOCK_SIZE * blocks_per_entry));
+    server->use_prefetching = prefetch_cache_lines;
     return server;
 }
 
-void process_slices(const uint8_t *db, size_t bit_len, size_t block_per_entry, size_t query_size, uint8_t *q1, uint8_t *q2, __m256i *results) {
+void process_slices(const uint8_t *db, size_t bit_len, size_t block_per_entry, size_t query_size, uint8_t *q1, uint8_t *q2, __m256i *results, bool prefetch_cache_lines) {
     size_t bytes = (bit_len + 7) / 8;
 
     // Precompute active indices for q1, q2 to reduce branch misprediction
@@ -55,7 +57,7 @@ void process_slices(const uint8_t *db, size_t bit_len, size_t block_per_entry, s
             size_t base_index = (i1 * query_size + i2) * (BLOCK_SIZE * block_per_entry);
             if (base_index + (BLOCK_SIZE * block_per_entry) > bytes)
                 continue;
-            if (a2 + 1 < n2)
+            if (a2 + 1 < n2 && prefetch_cache_lines)
             {
                 size_t prefetch_base_index = (i1 * query_size + active_i2[i2 + 1]) * (BLOCK_SIZE * block_per_entry);
                 for (size_t cache_line = 0; cache_line < prefetch_lines_count; cache_line++)
@@ -78,7 +80,7 @@ __m256i *pir_answer(pir_server_t *self, uint8_t *q1, uint8_t *q2) {
         perror("Error allocating memory for results");
         return NULL;
     }
-    process_slices(self->db, self->db_size_bits, self->blocks_per_entry, self->query_size, q1, q2, result);
+    process_slices(self->db, self->db_size_bits, self->blocks_per_entry, self->query_size, q1, q2, result, self->use_prefetching);
 
     return result;
 }

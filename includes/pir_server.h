@@ -3,6 +3,7 @@
 
 #include <immintrin.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define BLOCK_SIZE (sizeof(__m256i))
 #define CACHE_LINE_SIZE (64)
@@ -13,9 +14,10 @@ typedef struct {
     size_t db_size_bits;
     size_t blocks_per_entry;
     size_t query_size;
+    bool use_prefetching;
 } pir_server_t;
 
-pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_entry);
+pir_server_t *pir_server_alloc(uint8_t *db, size_t db_size, size_t blocks_per_entry, bool prefetch_cache_lines);
 __m256i *pir_answer(pir_server_t *self, uint8_t *q1, uint8_t *q2);
 
 #endif
