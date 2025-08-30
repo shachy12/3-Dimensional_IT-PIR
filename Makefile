@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Isrc/ -O3 -Wall -Wextra -march=native -mavx2 -mpopcnt
-SRC = src/server/main.c src/utils/vector_utils.c
+CFLAGS = -Iincludes/ -O3 -Wall -Wextra -march=native -mavx2 -mpopcnt
+SRC = src/main.c src/pir_client.c src/pir_server.c
 OBJ = $(SRC:.c=.o)
 TARGET = server
 
